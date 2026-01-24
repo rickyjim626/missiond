@@ -1,0 +1,63 @@
+{
+  "name": "@anthropic/semantic-terminal",
+  "version": "0.1.0",
+  "description": "Claude Code terminal output parser - detect states, parse confirmations, extract tool outputs",
+  "main": "index.js",
+  "module": "index.mjs",
+  "types": "index.d.ts",
+  "napi": {
+    "name": "semantic-terminal",
+    "triples": {
+      "defaults": false,
+      "additional": [
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+        "x86_64-pc-windows-msvc"
+      ]
+    }
+  },
+  "files": [
+    "index.js",
+    "index.mjs",
+    "index.d.ts"
+  ],
+  "keywords": [
+    "claude",
+    "terminal",
+    "parser",
+    "semantic",
+    "cli",
+    "pty",
+    "state-machine"
+  ],
+  "author": "Xiaojin Pro",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rickyjim626/missiond"
+  },
+  "homepage": "https://github.com/rickyjim626/missiond#semantic-terminal",
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@anthropic/semantic-terminal-darwin-arm64": "0.1.0",
+    "@anthropic/semantic-terminal-darwin-x64": "0.1.0",
+    "@anthropic/semantic-terminal-linux-x64-gnu": "0.1.0",
+    "@anthropic/semantic-terminal-linux-x64-musl": "0.1.0",
+    "@anthropic/semantic-terminal-win32-x64-msvc": "0.1.0"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.0"
+  },
+  "scripts": {
+    "artifacts": "napi artifacts",
+    "build": "napi build --platform --release --strip --cargo-cwd ../../crates/semantic-terminal-napi --cargo-name semantic_terminal_napi",
+    "build:debug": "napi build --platform --cargo-cwd ../../crates/semantic-terminal-napi --cargo-name semantic_terminal_napi",
+    "prepublishOnly": "napi prepublish -t npm",
+    "test": "node test.js",
+    "universal": "napi universal"
+  }
+}

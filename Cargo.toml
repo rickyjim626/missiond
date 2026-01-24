@@ -6,6 +6,7 @@ members = [
     "crates/missiond-mcp",
     "crates/missiond-attach",
     "crates/missiond-daemon",
+    "crates/semantic-terminal-napi",
 ]
 
 [workspace.package]

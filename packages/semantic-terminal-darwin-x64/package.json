@@ -1,0 +1,16 @@
+{
+  "name": "@anthropic/semantic-terminal-darwin-x64",
+  "version": "0.1.0",
+  "os": ["darwin"],
+  "cpu": ["x64"],
+  "main": "semantic-terminal.darwin-x64.node",
+  "files": ["semantic-terminal.darwin-x64.node"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rickyjim626/missiond"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

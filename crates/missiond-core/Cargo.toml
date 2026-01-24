@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Core library for missiond - Mission Control daemon"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Core library for missiond - PTY management, semantic terminal parsing, and Claude Code orchestration"
+readme = "../../README.md"
 
 [dependencies]
 # Async runtime

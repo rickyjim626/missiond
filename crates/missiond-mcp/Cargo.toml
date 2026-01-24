@@ -1,10 +1,14 @@
 [package]
 name = "missiond-mcp"
-description = "MCP (Model Context Protocol) server for missiond"
+description = "MCP (Model Context Protocol) server for missiond - Claude Code multi-agent orchestration"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
 
 [dependencies]
 # Async runtime

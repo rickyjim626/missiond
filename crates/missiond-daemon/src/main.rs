@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use missiond_core::{
     CorePermissionDecision, MissionControl, MissionControlOptions, PermissionPolicy, PermissionRule,
     PTYManager, PTYSpawnOptions, PTYWebSocketServer, WSServerOptions,
@@ -19,9 +19,10 @@ use missiond_mcp::tools::ToolResult;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixListener;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
+
+use missiond_core::ipc::{self, IpcListener, IpcStream};
 
 #[derive(Clone)]
 struct AppState {
@@ -32,20 +33,23 @@ struct AppState {
 }
 
 fn default_mission_home() -> PathBuf {
-    if let Ok(home) = std::env::var("XJP_MISSION_HOME") {
-        return PathBuf::from(home);
-    }
-    dirs::home_dir()
-        .map(|h| h.join(".xjp-mission"))
-        .unwrap_or_else(|| PathBuf::from(".xjp-mission"))
+    ipc::default_mission_home()
 }
 
 fn env_path(var: &str) -> Option<PathBuf> {
     std::env::var(var).ok().map(PathBuf::from)
 }
 
-fn socket_path() -> PathBuf {
-    env_path("MISSION_IPC_SOCKET").unwrap_or_else(|| default_mission_home().join("missiond.sock"))
+fn ipc_endpoint_from_env() -> String {
+    if let Ok(endpoint) = std::env::var("MISSION_IPC_ENDPOINT") {
+        return endpoint;
+    }
+    // Legacy support for MISSION_IPC_SOCKET on Unix
+    #[cfg(unix)]
+    if let Ok(socket) = std::env::var("MISSION_IPC_SOCKET") {
+        return socket;
+    }
+    ipc::default_ipc_endpoint()
 }
 
 fn db_path() -> PathBuf {
@@ -519,10 +523,15 @@ impl AppState {
                 let PTYLogsArgs { slot_id } = serde_json::from_value(args)?;
                 let status = self.pty.get_status(&slot_id).await;
                 let status = status.ok_or_else(|| anyhow!("PTY session not found"))?;
+                #[cfg(unix)]
+                let hint = format!("tail -f {}", status.log_file.display());
+                #[cfg(windows)]
+                let hint = format!("Get-Content -Path \"{}\" -Wait -Tail 50", status.log_file.display());
+
                 Ok(ToolResult::json(&serde_json::json!({
                     "slotId": slot_id,
                     "logFile": status.log_file,
-                    "hint": format!("tail -f {}", status.log_file.display()),
+                    "hint": hint,
                 })))
             }
 
@@ -734,7 +743,7 @@ impl AppState {
 // IPC server (daemon)
 // =========================
 
-async fn handle_ipc_connection(state: AppState, mut reader: BufReader<tokio::net::UnixStream>) -> Result<()> {
+async fn handle_ipc_connection(state: AppState, mut reader: BufReader<IpcStream>) -> Result<()> {
     let mut line = String::new();
     let bytes = reader.read_line(&mut line).await?;
     if bytes == 0 {
@@ -791,21 +800,8 @@ async fn handle_ipc_request(state: AppState, request: Request) -> Response {
     }
 }
 
-async fn bind_singleton_socket(path: &Path) -> Result<UnixListener> {
-    if path.exists() {
-        // If something is listening, assume daemon already running.
-        if tokio::net::UnixStream::connect(path).await.is_ok() {
-            return Err(anyhow!("missiond already running (socket: {})", path.display()));
-        }
-        // Stale socket.
-        std::fs::remove_file(path).ok();
-    }
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-
-    UnixListener::bind(path).with_context(|| format!("Failed to bind IPC socket: {}", path.display()))
+async fn bind_ipc_listener(endpoint: &str) -> Result<IpcListener> {
+    IpcListener::bind(endpoint).await
 }
 
 #[tokio::main]
@@ -879,9 +875,9 @@ async fn main() -> Result<()> {
     }
 
     // IPC server
-    let sock = socket_path();
-    let listener = bind_singleton_socket(&sock).await?;
-    info!(socket = %sock.display(), "missiond IPC listening");
+    let endpoint = ipc_endpoint_from_env();
+    let listener = bind_ipc_listener(&endpoint).await?;
+    info!(endpoint = %endpoint, "missiond IPC listening");
 
     let state = AppState {
         mission,
@@ -891,7 +887,7 @@ async fn main() -> Result<()> {
     };
 
     loop {
-        let (stream, _addr) = listener.accept().await?;
+        let stream = listener.accept().await?;
         let reader = BufReader::new(stream);
         if let Err(e) = handle_ipc_connection(state.clone(), reader).await {
             warn!(error = %e, "IPC connection error");

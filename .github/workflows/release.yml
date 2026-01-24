@@ -45,6 +45,12 @@ jobs:
             platform: linux-x64-musl
             self-hosted: true
 
+          # Windows x64 (GitHub hosted)
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: win32-x64
+            self-hosted: false
+
     steps:
       - uses: actions/checkout@v4
 
@@ -81,12 +87,21 @@ jobs:
           cargo build --release --target ${{ matrix.target }} -p missiond-daemon
           cargo build --release --target ${{ matrix.target }} -p missiond-mcp
 
-      - name: Prepare artifacts
+      - name: Prepare artifacts (Unix)
+        if: runner.os != 'Windows'
         run: |
           mkdir -p artifacts/bin
           cp target/${{ matrix.target }}/release/missiond artifacts/bin/
           cp target/${{ matrix.target }}/release/mission-mcp artifacts/bin/
           chmod +x artifacts/bin/*
+
+      - name: Prepare artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/bin
+          Copy-Item target/${{ matrix.target }}/release/missiond.exe artifacts/bin/
+          Copy-Item target/${{ matrix.target }}/release/mission-mcp.exe artifacts/bin/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -124,6 +139,10 @@ jobs:
           # linux-x64-musl
           mkdir -p packages/core-linux-x64-musl/bin
           cp artifacts/binaries-linux-x64-musl/* packages/core-linux-x64-musl/bin/
+
+          # win32-x64
+          mkdir -p packages/core-win32-x64/bin
+          cp artifacts/binaries-win32-x64/* packages/core-win32-x64/bin/
 
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v4
@@ -169,7 +188,7 @@ jobs:
           VERSION=${{ steps.version.outputs.VERSION }}
 
           # Update platform package versions
-          for pkg in packages/core-darwin-arm64 packages/core-darwin-x64 packages/core-linux-x64-gnu packages/core-linux-x64-musl; do
+          for pkg in packages/core-darwin-arm64 packages/core-darwin-x64 packages/core-linux-x64-gnu packages/core-linux-x64-musl packages/core-win32-x64; do
             if [ -f "$pkg/package.json" ]; then
               jq --arg v "$VERSION" '.version = $v' "$pkg/package.json" > tmp.json && mv tmp.json "$pkg/package.json"
             fi
@@ -182,14 +201,15 @@ jobs:
             .optionalDependencies["@missiond/core-darwin-arm64"] = $v |
             .optionalDependencies["@missiond/core-darwin-x64"] = $v |
             .optionalDependencies["@missiond/core-linux-x64-gnu"] = $v |
-            .optionalDependencies["@missiond/core-linux-x64-musl"] = $v
+            .optionalDependencies["@missiond/core-linux-x64-musl"] = $v |
+            .optionalDependencies["@missiond/core-win32-x64"] = $v
           ' package.json > tmp.json && mv tmp.json package.json
 
       - name: Publish platform packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          for pkg in packages/core-darwin-arm64 packages/core-darwin-x64 packages/core-linux-x64-gnu packages/core-linux-x64-musl; do
+          for pkg in packages/core-darwin-arm64 packages/core-darwin-x64 packages/core-linux-x64-gnu packages/core-linux-x64-musl packages/core-win32-x64; do
             if [ -d "$pkg" ]; then
               echo "Publishing $pkg..."
               cd "$pkg"

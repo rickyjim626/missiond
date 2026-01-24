@@ -1,9 +1,11 @@
 //! mission-mcp - MCP stdio server proxy for missiond daemon
 //!
 //! This binary is intended to be launched by Claude Code as an MCP server.
-//! It forwards tool calls to a singleton `missiond` daemon over a Unix socket.
+//! It forwards tool calls to a singleton `missiond` daemon over IPC.
+//! - Unix: Uses Unix domain sockets
+//! - Windows: Uses TCP loopback
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
@@ -11,10 +13,10 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
+use missiond_core::ipc::{self, IpcStream};
 use missiond_mcp::protocol::{Request, RequestId, Response, JSONRPC_VERSION};
 use missiond_mcp::server::{McpServer, ToolHandler};
 use missiond_mcp::tools::ToolResult;
@@ -23,7 +25,7 @@ static NEXT_ID: AtomicI64 = AtomicI64::new(1);
 
 #[derive(Clone)]
 struct IpcClient {
-    socket_path: PathBuf,
+    endpoint: String,
 }
 
 impl IpcClient {
@@ -40,9 +42,9 @@ impl IpcClient {
             id: RequestId::Number(id),
         };
 
-        let mut stream = UnixStream::connect(&self.socket_path)
+        let mut stream = IpcStream::connect(&self.endpoint)
             .await
-            .with_context(|| format!("Failed to connect to daemon socket: {}", self.socket_path.display()))?;
+            .with_context(|| format!("Failed to connect to daemon: {}", self.endpoint))?;
 
         let request_json = serde_json::to_string(&request)?;
         debug!(%name, "IPC -> {}", request_json);
@@ -89,15 +91,6 @@ impl ToolHandler for ProxyHandler {
     }
 }
 
-fn default_mission_home() -> PathBuf {
-    if let Ok(home) = std::env::var("XJP_MISSION_HOME") {
-        return PathBuf::from(home);
-    }
-    dirs::home_dir()
-        .map(|h| h.join(".xjp-mission"))
-        .unwrap_or_else(|| PathBuf::from(".xjp-mission"))
-}
-
 fn log_filter() -> tracing_subscriber::EnvFilter {
     let level = if let Ok(v) = std::env::var("RUST_LOG") {
         v
@@ -115,24 +108,34 @@ fn log_filter() -> tracing_subscriber::EnvFilter {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"))
 }
 
-fn socket_path_from_env() -> PathBuf {
-    if let Ok(sock) = std::env::var("MISSION_IPC_SOCKET") {
-        return PathBuf::from(sock);
+fn ipc_endpoint_from_env() -> String {
+    if let Ok(endpoint) = std::env::var("MISSION_IPC_ENDPOINT") {
+        return endpoint;
     }
-    default_mission_home().join("missiond.sock")
+    // Legacy support for MISSION_IPC_SOCKET on Unix
+    #[cfg(unix)]
+    if let Ok(socket) = std::env::var("MISSION_IPC_SOCKET") {
+        return socket;
+    }
+    ipc::default_ipc_endpoint()
 }
 
 fn missiond_binary_path() -> PathBuf {
-    // Prefer a sibling `missiond` binary next to the current executable (dev / cargo build).
+    #[cfg(windows)]
+    const BINARY_NAME: &str = "missiond.exe";
+    #[cfg(not(windows))]
+    const BINARY_NAME: &str = "missiond";
+
+    // Prefer a sibling binary next to the current executable (dev / cargo build).
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let candidate = dir.join("missiond");
+            let candidate = dir.join(BINARY_NAME);
             if candidate.exists() {
                 return candidate;
             }
         }
     }
-    PathBuf::from("missiond")
+    PathBuf::from(BINARY_NAME)
 }
 
 fn spawn_daemon() -> Result<()> {
@@ -148,20 +151,20 @@ fn spawn_daemon() -> Result<()> {
     Ok(())
 }
 
-async fn ensure_daemon(socket_path: &Path) -> Result<()> {
-    if UnixStream::connect(socket_path).await.is_ok() {
+async fn ensure_daemon(endpoint: &str) -> Result<()> {
+    if IpcStream::can_connect(endpoint).await {
         return Ok(());
     }
 
     warn!(
-        socket = %socket_path.display(),
-        "Daemon socket not reachable, starting daemon"
+        endpoint = %endpoint,
+        "Daemon not reachable, starting daemon"
     );
     spawn_daemon()?;
 
     // Wait for daemon to come up
     for _ in 0..50 {
-        if UnixStream::connect(socket_path).await.is_ok() {
+        if IpcStream::can_connect(endpoint).await {
             info!("Daemon is ready");
             return Ok(());
         }
@@ -169,8 +172,8 @@ async fn ensure_daemon(socket_path: &Path) -> Result<()> {
     }
 
     Err(anyhow!(
-        "Timed out waiting for daemon socket: {}",
-        socket_path.display()
+        "Timed out waiting for daemon: {}",
+        endpoint
     ))
 }
 
@@ -181,11 +184,11 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let socket_path = socket_path_from_env();
-    ensure_daemon(&socket_path).await?;
+    let endpoint = ipc_endpoint_from_env();
+    ensure_daemon(&endpoint).await?;
 
     let handler = ProxyHandler {
-        client: IpcClient { socket_path },
+        client: IpcClient { endpoint },
     };
     let mut server = McpServer::new(handler);
     server.run().await?;

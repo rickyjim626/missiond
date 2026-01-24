@@ -451,21 +451,51 @@ impl PTYSession {
         })?;
 
         // Build command: claude --add-dir "cwd"
-        let mut cmd = CommandBuilder::new("zsh");
-        cmd.args([
-            "-l",
-            "-c",
-            &format!("claude --add-dir \"{}\"", self.cwd.display()),
-        ]);
+        // Platform-specific shell handling
+        #[cfg(unix)]
+        let mut cmd = {
+            let mut c = CommandBuilder::new("zsh");
+            c.args([
+                "-l",
+                "-c",
+                &format!("claude --add-dir \"{}\"", self.cwd.display()),
+            ]);
+            c
+        };
+
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut c = CommandBuilder::new("cmd.exe");
+            c.args([
+                "/C",
+                &format!("claude --add-dir \"{}\"", self.cwd.display()),
+            ]);
+            c
+        };
+
         cmd.cwd(&self.cwd);
 
-        // Set environment
-        cmd.env("TERM", "xterm-256color");
-        if let Ok(path) = std::env::var("PATH") {
-            cmd.env("PATH", path);
+        // Set environment (platform-specific)
+        #[cfg(unix)]
+        {
+            cmd.env("TERM", "xterm-256color");
+            if let Ok(path) = std::env::var("PATH") {
+                cmd.env("PATH", path);
+            }
+            if let Ok(home) = std::env::var("HOME") {
+                cmd.env("HOME", home);
+            }
         }
-        if let Ok(home) = std::env::var("HOME") {
-            cmd.env("HOME", home);
+
+        #[cfg(windows)]
+        {
+            cmd.env("TERM", "xterm-256color");
+            if let Ok(path) = std::env::var("PATH") {
+                cmd.env("PATH", path);
+            }
+            if let Ok(userprofile) = std::env::var("USERPROFILE") {
+                cmd.env("USERPROFILE", userprofile);
+            }
         }
 
         // Spawn child process

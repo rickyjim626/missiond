@@ -12,6 +12,7 @@
 pub mod cc_tasks;
 pub mod core;
 pub mod db;
+pub mod ipc;
 pub mod pty;
 pub mod semantic;
 pub mod sync;
@@ -62,3 +63,8 @@ pub use ws::{PTYWebSocketServer, WSServerOptions};
 
 // Re-export Sync types
 pub use sync::{SyncClient, SyncClientOptions, SyncEvent, SyncRelay, SyncRelayOptions};
+
+// Re-export IPC types
+pub use ipc::{
+    default_ipc_endpoint, default_mission_home, ipc_endpoint, IpcListener, IpcStream,
+};

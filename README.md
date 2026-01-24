@@ -59,8 +59,7 @@ npm install @missiond/core
 The npm package includes pre-built binaries for:
 - macOS (ARM64, x64)
 - Linux (x64 glibc, x64 musl)
-
-> **Note:** Windows is not currently supported (requires Unix sockets).
+- Windows (x64)
 
 ## Quick Start
 
@@ -211,9 +210,14 @@ mission.close();
 | `XJP_MISSION_HOME` | `~/.xjp-mission` | Config directory |
 | `MISSION_DB_PATH` | `$HOME/mission.db` | SQLite database |
 | `MISSION_SLOTS_CONFIG` | `$HOME/slots.yaml` | Slot definitions |
-| `MISSION_IPC_SOCKET` | `$HOME/missiond.sock` | Unix socket path |
+| `MISSION_IPC_ENDPOINT` | Unix socket / TCP (Windows) | IPC endpoint |
 | `MISSION_WS_PORT` | `9120` | WebSocket port |
 | `MISSION_LOG_LEVEL` | `warn` | Log level |
+
+### Cross-Platform IPC
+
+- **Unix** (macOS/Linux): Uses Unix domain sockets (`~/.xjp-mission/missiond.sock`)
+- **Windows**: Uses TCP loopback (`127.0.0.1:port`)
 
 ### Permissions
 

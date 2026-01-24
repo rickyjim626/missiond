@@ -30,12 +30,8 @@ anyhow = { workspace = true }
 # Paths
 dirs = { workspace = true }
 
-# Internal
-missiond-core = { workspace = true, optional = true }
-
-[features]
-default = []
-full = ["missiond-core"]
+# Internal - missiond-core for cross-platform IPC
+missiond-core = { workspace = true }
 
 [[bin]]
 name = "mission-mcp"

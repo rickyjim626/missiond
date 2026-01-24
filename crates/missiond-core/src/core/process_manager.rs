@@ -212,24 +212,60 @@ impl ProcessManager {
             .unwrap_or_else(|_| ".".to_string());
         let cwd = slot.config.cwd.as_deref().unwrap_or(&default_cwd);
 
-        // macOS: Use osascript to open Terminal
-        let script = format!(
-            r#"
-            tell application "Terminal"
-                do script "cd {} && echo 'Agent {} ready ({})' && read -p 'Press Enter to exit...'"
-                activate
-            end tell
-        "#,
-            cwd, slot.config.id, slot.config.role
-        );
+        #[cfg(target_os = "macos")]
+        {
+            // macOS: Use osascript to open Terminal
+            let script = format!(
+                r#"
+                tell application "Terminal"
+                    do script "cd {} && echo 'Agent {} ready ({})' && read -p 'Press Enter to exit...'"
+                    activate
+                end tell
+            "#,
+                cwd, slot.config.id, slot.config.role
+            );
 
-        let mut child = Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .spawn()?;
+            let mut child = Command::new("osascript")
+                .arg("-e")
+                .arg(&script)
+                .spawn()?;
 
-        // Detach the process
-        child.wait().await?;
+            child.wait().await?;
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            // Windows: Open new cmd window
+            let cmd = format!(
+                "start cmd /k \"cd /d {} && echo Agent {} ready ({}) && pause\"",
+                cwd, slot.config.id, slot.config.role
+            );
+
+            let mut child = Command::new("cmd")
+                .args(["/C", &cmd])
+                .spawn()?;
+
+            child.wait().await?;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            // Linux: Try common terminal emulators
+            let msg = format!("Agent {} ready ({})", slot.config.id, slot.config.role);
+
+            // Try gnome-terminal first, then xterm
+            let result = Command::new("gnome-terminal")
+                .args(["--working-directory", cwd, "--", "bash", "-c", &format!("echo '{}'; read -p 'Press Enter to exit...'", msg)])
+                .spawn();
+
+            if result.is_err() {
+                // Fallback to xterm
+                let mut child = Command::new("xterm")
+                    .args(["-e", &format!("cd {} && echo '{}' && read -p 'Press Enter to exit...'", cwd, msg)])
+                    .spawn()?;
+                child.wait().await?;
+            }
+        }
 
         info!(slot_id = %slot.config.id, "Visible terminal opened");
         Ok(())

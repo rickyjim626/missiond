@@ -287,3 +287,172 @@ pub trait ConfirmParser {
     /// Format a response for the terminal
     fn format_response(&self, info: &ConfirmInfo, response: &ConfirmResponse) -> String;
 }
+
+// ============ Title Types ============
+
+/// Information parsed from Claude Code terminal title
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeCodeTitle {
+    /// Current task name (if any)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_name: Option<String>,
+    /// Spinner character state
+    pub spinner_state: String,
+    /// Whether Claude is currently processing
+    pub is_processing: bool,
+}
+
+/// Context for title parsing
+#[derive(Debug, Clone)]
+pub struct TitleParserContext {
+    /// The terminal title to parse
+    pub terminal_title: String,
+}
+
+impl TitleParserContext {
+    /// Create a new title parser context
+    pub fn new(title: impl Into<String>) -> Self {
+        Self {
+            terminal_title: title.into(),
+        }
+    }
+}
+
+/// Result of title parsing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TitleParseResult {
+    /// Output type
+    pub output_type: String,
+    /// Raw title text
+    pub raw: String,
+    /// Parsed data
+    pub data: ClaudeCodeTitle,
+    /// Confidence level (0.0 - 1.0)
+    pub confidence: f64,
+}
+
+/// Trait for title parsers
+pub trait TitleParser {
+    /// Get parser metadata
+    fn meta(&self) -> &ParserMeta;
+
+    /// Check if this parser can handle the given title
+    fn can_parse(&self, context: &TitleParserContext) -> bool;
+
+    /// Parse the terminal title
+    fn parse(&self, context: &TitleParserContext) -> Option<TitleParseResult>;
+}
+
+// ============ Tool Output Types ============
+
+/// Status of a tool execution
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolStatus {
+    /// Tool is currently running
+    Running,
+    /// Tool has completed
+    Completed,
+}
+
+impl std::fmt::Display for ToolStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ToolStatus::Running => write!(f, "running"),
+            ToolStatus::Completed => write!(f, "completed"),
+        }
+    }
+}
+
+/// Parsed tool output from Claude Code
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeCodeToolOutput {
+    /// Tool name (e.g., "Bash", "Read", "Edit")
+    pub tool_name: String,
+    /// Tool parameters
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub params: HashMap<String, serde_json::Value>,
+    /// Tool output content
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    /// Duration in milliseconds (if completed)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<f64>,
+    /// Tool execution status
+    pub status: ToolStatus,
+}
+
+/// Result of tool output parsing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolOutputResult {
+    /// Output type (always "claude-tool")
+    #[serde(rename = "type")]
+    pub output_type: String,
+    /// Raw text that was parsed
+    pub raw: String,
+    /// Parsed tool data
+    pub data: ClaudeCodeToolOutput,
+    /// Parser confidence (0.0 - 1.0)
+    pub confidence: f64,
+}
+
+/// Trait for tool output parsers
+pub trait ToolOutputParser {
+    /// Get parser metadata
+    fn meta(&self) -> &ParserMeta;
+
+    /// Check if the context can be parsed as tool output
+    fn can_parse(&self, context: &ParserContext) -> bool;
+
+    /// Parse tool output from context
+    fn parse(&self, context: &ParserContext) -> Option<ToolOutputResult>;
+}
+
+// ============ Status Types ============
+
+/// Phase of Claude Code status
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusPhase {
+    /// Thinking/processing
+    Thinking,
+    /// Running a tool
+    ToolRunning,
+    /// Unknown phase
+    Unknown,
+}
+
+impl std::fmt::Display for StatusPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StatusPhase::Thinking => write!(f, "thinking"),
+            StatusPhase::ToolRunning => write!(f, "tool_running"),
+            StatusPhase::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
+/// Claude Code status bar information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeCodeStatus {
+    /// Spinner character
+    pub spinner: String,
+    /// Status text (e.g., "Precipitating...")
+    pub status_text: String,
+    /// Current phase
+    pub phase: StatusPhase,
+    /// Whether the operation can be interrupted
+    pub interruptible: bool,
+}
+
+/// Trait for status parsers
+pub trait StatusParser {
+    /// Get parser metadata
+    fn meta(&self) -> &ParserMeta;
+
+    /// Check if the parser can parse the given context
+    fn can_parse(&self, context: &ParserContext) -> bool;
+
+    /// Parse status from context
+    fn parse(&self, context: &ParserContext) -> Option<ClaudeCodeStatus>;
+}

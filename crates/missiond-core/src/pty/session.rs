@@ -46,6 +46,15 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use super::extractor::{IncrementalExtractor, StableTextOp, TextAssembler};
+use crate::semantic::{
+    ClaudeCodeConfirmParser, ClaudeCodeStateParser, ClaudeCodeStatusParser,
+    ClaudeCodeToolOutputParser,
+    ConfirmParser, ParserContext, StateParser, StatusParser, ToolOutputParser,
+    default_registry,
+    ClaudeCodeStatus, ClaudeCodeToolOutput, ClaudeCodeTitle,
+    ConfirmInfo as SemanticConfirmInfo,
+    State as SemanticState,
+};
 
 // ========== Types ==========
 
@@ -268,6 +277,12 @@ pub enum SessionEvent {
         prompt: String,
         info: Option<ConfirmInfo>,
     },
+    /// Status bar update (spinner + status text)
+    StatusUpdate(ClaudeCodeStatus),
+    /// Tool output parsed
+    ToolOutput(ClaudeCodeToolOutput),
+    /// Terminal title changed
+    TitleChange(ClaudeCodeTitle),
     /// Session exited
     Exit(i32),
 }
@@ -604,6 +619,13 @@ impl PTYSession {
     ) {
         let mut check_interval = interval(Duration::from_millis(100));
 
+        // Create parsers (stateless, can be reused)
+        let state_parser = ClaudeCodeStateParser::new();
+        let confirm_parser = ClaudeCodeConfirmParser::new();
+        let status_parser = ClaudeCodeStatusParser::new();
+        let tool_parser = ClaudeCodeToolOutputParser::new();
+        let fingerprint_registry = default_registry();
+
         while running.load(Ordering::SeqCst) {
             check_interval.tick().await;
 
@@ -632,12 +654,33 @@ impl PTYSession {
                 lines
             };
 
-            // Detect state from screen content
-            let detected_state = detect_state_from_screen(&last_lines);
+            // Create ParserContext with current state
+            let current_state = *state.read().await;
+            let context = ParserContext::new(last_lines.clone())
+                .with_state(current_state_to_semantic(current_state));
+
+            // Use FingerprintRegistry for quick hints
+            let hints = fingerprint_registry.extract(&context).hints;
+
+            // Detect state using semantic StateParser
+            let detected_result = state_parser.detect_state(&context);
+            let detected_state = detected_result.as_ref().map(|r| semantic_state_to_session_state(r.state));
 
             // Handle state transitions
-            let current_state = *state.read().await;
             if let Some(new_state) = detected_state {
+                // Check for trust confirmation during startup (auto-confirm)
+                if let Some(ref result) = detected_result {
+                    if let Some(ref meta) = result.meta {
+                        if meta.needs_trust_confirm == Some(true) {
+                            debug!("Auto-confirming trust dialog");
+                            if let Some(writer) = pty_writer.lock().await.as_mut() {
+                                let _ = writer.write_all(b"\r");
+                            }
+                            continue;
+                        }
+                    }
+                }
+
                 if new_state != current_state {
                     // Begin turn when entering processing state
                     if new_state.is_processing() && !current_state.is_processing() {
@@ -673,9 +716,10 @@ impl PTYSession {
                         assistant_block_active.store(false, Ordering::SeqCst);
                     }
 
-                    // Handle confirming state
+                    // Handle confirming state using semantic ConfirmParser
                     if new_state == SessionState::Confirming {
-                        let confirm_info = parse_confirm_dialog(&last_lines);
+                        let semantic_confirm = confirm_parser.detect_confirm(&context);
+                        let confirm_info = semantic_confirm.as_ref().map(convert_semantic_confirm_info);
                         *pending_tool_confirm.write().await = confirm_info.clone();
 
                         // Check permission if callback is set
@@ -721,6 +765,20 @@ impl PTYSession {
                         new_state,
                         prev_state: current_state,
                     });
+                }
+            }
+
+            // Emit StatusUpdate event if spinner is detected
+            if hints.has_spinner {
+                if let Some(status) = status_parser.parse(&context) {
+                    let _ = event_tx.send(SessionEvent::StatusUpdate(status));
+                }
+            }
+
+            // Emit ToolOutput event if tool output is detected
+            if hints.has_tool_output {
+                if let Some(result) = tool_parser.parse(&context) {
+                    let _ = event_tx.send(SessionEvent::ToolOutput(result.data));
                 }
             }
 
@@ -986,98 +1044,56 @@ pub enum ConfirmResponse {
 
 // ========== Helper Functions ==========
 
-/// Detect session state from screen content
-fn detect_state_from_screen(lines: &[String]) -> Option<SessionState> {
-    // Check last few lines for state indicators
-    for line in lines.iter().rev().take(5) {
-        let trimmed = line.trim();
-
-        // Idle: prompt line (> or ❯)
-        if trimmed.starts_with('>') || trimmed.starts_with('❯') {
-            // Make sure it's just the prompt, not user input
-            let after_prompt = trimmed.trim_start_matches(['>', '❯']).trim();
-            if after_prompt.is_empty() {
-                return Some(SessionState::Idle);
-            }
-        }
-
-        // Confirming: Y/n pattern or numbered options
-        if trimmed.contains("(Y/n)") || trimmed.contains("(y/N)") {
-            return Some(SessionState::Confirming);
-        }
-        if trimmed.starts_with("1.") && trimmed.contains("Yes") {
-            return Some(SessionState::Confirming);
-        }
-
-        // Thinking/Tool running: spinner characters
-        let spinner_chars = ['·', '✻', '✽', '✶', '✳', '✢', '⠐', '⠂', '⠈', '⠁', '⠉', '⠃', '⠋'];
-        if spinner_chars.iter().any(|c| trimmed.starts_with(*c)) {
-            // Check if it's a status line
-            if trimmed.contains("Reading") || trimmed.contains("Writing") || trimmed.contains("Running") {
-                return Some(SessionState::ToolRunning);
-            }
-            return Some(SessionState::Thinking);
-        }
-
-        // Error patterns
-        if trimmed.contains("Error:") || trimmed.contains("error:") {
-            return Some(SessionState::Error);
-        }
+/// Convert semantic State to SessionState
+fn semantic_state_to_session_state(state: SemanticState) -> SessionState {
+    match state {
+        SemanticState::Starting => SessionState::Starting,
+        SemanticState::Idle => SessionState::Idle,
+        SemanticState::Thinking => SessionState::Thinking,
+        SemanticState::ToolRunning => SessionState::ToolRunning,
+        SemanticState::Confirming => SessionState::Confirming,
+        SemanticState::Error => SessionState::Error,
     }
-
-    None
 }
 
-/// Parse confirmation dialog from screen
-fn parse_confirm_dialog(lines: &[String]) -> Option<ConfirmInfo> {
-    let mut tool_name = None;
-    let mut mcp_server = None;
-    let mut options = Vec::new();
-    let selected = 0;
-
-    for line in lines {
-        let trimmed = line.trim();
-
-        // Tool name pattern: "⏺ ToolName(...)"
-        if trimmed.starts_with('⏺') {
-            if let Some(name_start) = trimmed.find(' ') {
-                let rest = &trimmed[name_start..].trim();
-                if let Some(paren) = rest.find('(') {
-                    tool_name = Some(rest[..paren].to_string());
-                }
-            }
-        }
-
-        // MCP server pattern
-        if trimmed.contains("mcp:") || trimmed.contains("MCP:") {
-            if let Some(idx) = trimmed.find(':') {
-                mcp_server = Some(trimmed[idx + 1..].trim().to_string());
-            }
-        }
-
-        // Options pattern: "1. Yes", "2. ...", "3. No"
-        if let Some(first_char) = trimmed.chars().next() {
-            if first_char.is_ascii_digit() && trimmed.chars().nth(1) == Some('.') {
-                let option_text = trimmed[2..].trim().to_string();
-                options.push(option_text);
-            }
-        }
+/// Convert SessionState to semantic State
+fn current_state_to_semantic(state: SessionState) -> SemanticState {
+    match state {
+        SessionState::Starting => SemanticState::Starting,
+        SessionState::Idle => SemanticState::Idle,
+        SessionState::Thinking => SemanticState::Thinking,
+        SessionState::Responding => SemanticState::Thinking, // No direct mapping
+        SessionState::ToolRunning => SemanticState::ToolRunning,
+        SessionState::Confirming => SemanticState::Confirming,
+        SessionState::Error => SemanticState::Error,
+        SessionState::Exited => SemanticState::Idle, // No direct mapping
     }
+}
 
-    if options.is_empty() {
-        return None;
-    }
+/// Convert semantic ConfirmInfo to session ConfirmInfo
+fn convert_semantic_confirm_info(info: &SemanticConfirmInfo) -> ConfirmInfo {
+    let options: Vec<String> = info
+        .options
+        .as_ref()
+        .map(|opts| opts.iter().map(|o| o.label.clone()).collect())
+        .unwrap_or_default();
 
-    Some(ConfirmInfo {
-        confirm_type: "tool".to_string(),
-        tool: tool_name.map(|name| ToolInfo {
-            name,
-            mcp_server,
-            params: HashMap::new(),
-        }),
+    let tool = info.tool.as_ref().map(|t| ToolInfo {
+        name: t.name.clone(),
+        mcp_server: t.mcp_server.clone(),
+        params: t
+            .params
+            .iter()
+            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+            .collect(),
+    });
+
+    ConfirmInfo {
+        confirm_type: format!("{:?}", info.confirm_type).to_lowercase(),
+        tool,
         options,
-        selected,
-    })
+        selected: 0, // Default to first option selected
+    }
 }
 
 /// Classify stable op source

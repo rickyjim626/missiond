@@ -26,8 +26,8 @@ jobs:
             target: aarch64-apple-darwin
             platform: darwin-arm64
 
-          # macOS x64
-          - os: macos-13
+          # macOS x64 (Intel)
+          - os: macos-15
             target: x86_64-apple-darwin
             platform: darwin-x64
 
@@ -41,10 +41,10 @@ jobs:
             target: x86_64-unknown-linux-musl
             platform: linux-x64-musl
 
-          # Windows x64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            platform: win32-x64
+          # Windows x64 - disabled: Unix sockets not supported
+          # - os: windows-latest
+          #   target: x86_64-pc-windows-msvc
+          #   platform: win32-x64
 
     steps:
       - uses: actions/checkout@v4
@@ -121,9 +121,9 @@ jobs:
           mkdir -p packages/core-linux-x64-musl/bin
           cp artifacts/binaries-linux-x64-musl/* packages/core-linux-x64-musl/bin/
 
-          # win32-x64
-          mkdir -p packages/core-win32-x64/bin
-          cp artifacts/binaries-win32-x64/* packages/core-win32-x64/bin/
+          # win32-x64 - disabled: Unix sockets not supported
+          # mkdir -p packages/core-win32-x64/bin
+          # cp artifacts/binaries-win32-x64/* packages/core-win32-x64/bin/
 
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v4
@@ -169,7 +169,7 @@ jobs:
           VERSION=${{ steps.version.outputs.VERSION }}
 
           # Update platform package versions
-          for pkg in packages/core-darwin-arm64 packages/core-darwin-x64 packages/core-linux-x64-gnu packages/core-linux-x64-musl packages/core-win32-x64; do
+          for pkg in packages/core-darwin-arm64 packages/core-darwin-x64 packages/core-linux-x64-gnu packages/core-linux-x64-musl; do
             if [ -f "$pkg/package.json" ]; then
               jq --arg v "$VERSION" '.version = $v' "$pkg/package.json" > tmp.json && mv tmp.json "$pkg/package.json"
             fi
@@ -182,15 +182,14 @@ jobs:
             .optionalDependencies["@missiond/core-darwin-arm64"] = $v |
             .optionalDependencies["@missiond/core-darwin-x64"] = $v |
             .optionalDependencies["@missiond/core-linux-x64-gnu"] = $v |
-            .optionalDependencies["@missiond/core-linux-x64-musl"] = $v |
-            .optionalDependencies["@missiond/core-win32-x64"] = $v
+            .optionalDependencies["@missiond/core-linux-x64-musl"] = $v
           ' package.json > tmp.json && mv tmp.json package.json
 
       - name: Publish platform packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          for pkg in packages/core-darwin-arm64 packages/core-darwin-x64 packages/core-linux-x64-gnu packages/core-linux-x64-musl packages/core-win32-x64; do
+          for pkg in packages/core-darwin-arm64 packages/core-darwin-x64 packages/core-linux-x64-gnu packages/core-linux-x64-musl; do
             if [ -d "$pkg" ]; then
               echo "Publishing $pkg..."
               cd "$pkg"
